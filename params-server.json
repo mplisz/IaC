@@ -1,0 +1,14 @@
+[
+    {
+        "ParameterKey": "EnvironmentName",
+        "ParameterValue": "UdacityProjectIaC"
+    },
+    {
+        "ParameterKey": "MachineMinNumber",
+        "ParameterValue": "1"
+    },
+    {
+        "ParameterKey": "MachineMaxNumber",
+        "ParameterValue": "1"
+    }
+]

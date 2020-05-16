@@ -1,0 +1,192 @@
+Description: >
+  Marcin Plisz / Udacity Class Network IaC Project
+  This template deploys security groups and launch configuration
+
+Parameters:
+
+  EnvironmentName:
+    Description: An environment name the deployment will take place in
+    Type: String
+
+  MachineMinNumber:
+    Description: Min number of EC2 in autscaling
+    Type: String
+    
+  MachineMaxNumber:
+    Description: Max number of EC2 in autscaling
+    Type: String
+
+Resources:
+
+  # Security Groups
+  LBSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+        GroupDescription: Control traffic in/out Load Balacner
+        VpcId:
+          Fn::ImportValue:
+            !Sub ${EnvironmentName}-VPCID
+        SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  WebServersSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+        GroupDescription: Control traffic in/out Servers
+        VpcId:
+          Fn::ImportValue:
+            !Sub ${EnvironmentName}-VPCID
+        SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp #for SSH
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+
+  # Launch Configuration & Autoscaling Group 
+  WebAppLaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+          apt update -y
+          apt install -y apache2
+          systemctl start apache2
+          systemctl enable apache2
+          rm ../../var/www/html/index.html 
+          wget -P ../../var/www/html https://udacityprojectmp2.s3-us-west-2.amazonaws.com/index.html
+      ImageId: ami-003634241a8fcdec0
+      SecurityGroups: 
+        - !Ref WebServersSecGroup
+      InstanceType: t2.micro
+      BlockDeviceMappings:
+      - DeviceName: "/dev/sdk" 
+        Ebs:
+          VolumeSize: '10'   #10 gigabytes
+  
+  WebAppGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - Fn::ImportValue:
+            !Sub ${EnvironmentName}-Private-Subnets
+      LaunchConfigurationName:  !Ref WebAppLaunchConfig
+      MinSize: !Ref MachineMinNumber
+      MaxSize: !Ref MachineMaxNumber
+      TargetGroupARNs: 
+      - !Ref WebAppTargetGroup
+  
+  # WebAppTargetGroup to check if the servers are healthy
+  WebAppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 8
+      HealthyThresholdCount: 2
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 5
+      VpcId:
+        Fn::ImportValue:
+          !Sub ${EnvironmentName}-VPCID
+  
+  # Load Balancer itself
+  WebAppLB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+      - Fn::ImportValue: !Sub ${EnvironmentName}-Public-Subnet-1
+      - Fn::ImportValue: !Sub ${EnvironmentName}-Public-Subnet-2
+      SecurityGroups:
+      - !Ref LBSecGroup
+
+  #Listener
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref WebAppTargetGroup
+      LoadBalancerArn:  !Ref WebAppLB
+      Port: 80
+      Protocol: HTTP
+  
+  ALBListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+      - Type: forward
+        TargetGroupArn: !Ref 'WebAppTargetGroup'
+      Conditions:
+      - Field: path-pattern
+        Values: [/]
+      ListenerArn: !Ref 'Listener'
+      Priority: 1
+
+  #IAM
+  ProfileWithRolesForOurApp:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: '/' 
+      Roles: 
+      - !Ref S3ReadOnlyEC
+  
+  S3ReadOnlyEC:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service:
+                - 'ec2.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      Path: '/'
+      Policies:
+        - PolicyName: S3GetPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action: 's3:Get*'
+                Resource: '*'
+
+ 
+Outputs:
+
+  LoadBalancer:
+    Description: DNS for the LB
+    Value: 
+      !Join [ "", [ "http://", !GetAtt WebAppLB.DNSName ] ]
+    Export:
+      Name: !Sub "${EnvironmentName}-LB-DNS"
+
+
+
+
+
+
+
+    
